@@ -4,9 +4,9 @@ DB=/etc/turidatunnel/users.tsv
 MANAGER="$(dirname "$(readlink -f "$0")")/account-manager.sh"
 [[ -f "$DB" ]] || exit 0
 today="$(date +%F)"
-while IFS=$'\t' read -r proto user credential expiry; do
+while IFS=$'\t' read -r proto user credential expiry quota max_ip; do
   [[ -n "$proto" && -n "$user" && -n "$expiry" ]] || continue
   if [[ "$expiry" < "$today" || "$expiry" == "$today" ]]; then
-    "$MANAGER" delete "$proto" "$user"
+    "$MANAGER" delete "$proto" "$user" || true
   fi
-done < "$DB"
+done < <(cat "$DB")
