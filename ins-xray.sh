@@ -31,10 +31,10 @@ server {
     index index.html;
     server_tokens off;
     location ^~ /.well-known/acme-challenge/ {
-        root /var/www/turidatunnel-acme;
+        alias /var/www/turidatunnel-acme/.well-known/acme-challenge/;
         default_type text/plain;
         allow all;
-        try_files $uri =404;
+        autoindex off;
     }
     location / { try_files $uri $uri/ =404; }
 }
@@ -150,10 +150,10 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
     location ^~ /.well-known/acme-challenge/ {
-        root /var/www/turidatunnel-acme;
+        alias /var/www/turidatunnel-acme/.well-known/acme-challenge/;
         default_type text/plain;
         allow all;
-        try_files \$uri =404;
+        autoindex off;
     }
     location = /ssh { proxy_pass http://127.0.0.1:2082; include /etc/nginx/snippets/turidatunnel-ws.conf; }
     location = /vless { proxy_pass http://127.0.0.1:${VLESS_WS}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
