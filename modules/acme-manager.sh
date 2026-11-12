@@ -45,8 +45,25 @@ HOOK
   chmod 0755 /usr/local/sbin/turidatunnel-deploy-cert
 }
 
+acme_existing_cert_is_valid(){
+  local cert_dir="/root/.acme.sh/${DOMAIN}_ecc"
+  local cert="${cert_dir}/${DOMAIN}.cer"
+  local key="${cert_dir}/${DOMAIN}.key"
+
+  [[ -s "$cert" && -s "$key" ]] || return 1
+  openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || return 1
+  openssl x509 -in "$cert" -noout -checkhost "$DOMAIN" >/dev/null 2>&1 || return 1
+
+  # Pastikan private key cocok dengan sertifikat yang akan dipasang.
+  local cert_pub key_pub
+  cert_pub="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" || return 1
+  key_pub="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | awk '{print $1}')" || return 1
+  [[ -n "$cert_pub" && "$cert_pub" == "$key_pub" ]]
+}
+
 issue(){
   local mode="${1:-webroot}"
+  local issue_ok=0
   install_acme
   # Verify that Nginx serves the exact ACME webroot before contacting the CA.
   if [[ "$mode" == webroot ]]; then
@@ -67,16 +84,29 @@ issue(){
   fi
   case "$mode" in
     webroot)
-      "$BASE" --issue --server letsencrypt -d "$DOMAIN" -w "$WEBROOT" --keylength ec-256
+      if ! "$BASE" --issue --server letsencrypt -d "$DOMAIN" -w "$WEBROOT" --keylength ec-256; then
+        if acme_existing_cert_is_valid; then
+          echo "ACME tidak menerbitkan ulang sertifikat; sertifikat ECC yang ada masih valid untuk ${DOMAIN}. Melanjutkan pemasangan sertifikat tersebut."
+        else
+          echo "Penerbitan ACME gagal dan tidak ditemukan sertifikat ECC valid untuk ${DOMAIN}." >&2
+          return 1
+        fi
+      fi
       ;;
     standalone)
       # HTTP-01 standalone needs public TCP/80. Stop Nginx only for issuance.
       systemctl stop nginx || true
       if ! "$BASE" --issue --server letsencrypt -d "$DOMAIN" --standalone --httpport 80 --keylength ec-256; then
         systemctl start nginx || true
-        return 1
+        if acme_existing_cert_is_valid; then
+          echo "ACME tidak menerbitkan ulang sertifikat; sertifikat ECC yang ada masih valid untuk ${DOMAIN}. Melanjutkan pemasangan sertifikat tersebut."
+        else
+          echo "Penerbitan ACME gagal dan tidak ditemukan sertifikat ECC valid untuk ${DOMAIN}." >&2
+          return 1
+        fi
+      else
+        systemctl start nginx
       fi
-      systemctl start nginx
       ;;
     *) echo 'Metode harus webroot atau standalone.' >&2; exit 2;;
   esac
