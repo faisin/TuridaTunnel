@@ -31,16 +31,18 @@ check_listener 22 sshd 'OpenSSH'
 check_listener 109 dropbear 'Dropbear 109'
 check_listener 143 dropbear 'Dropbear 143'
 check_listener 2082 python3 'SSH-WS relay'
-check_listener 8443 stunnel 'stunnel SSH TLS'
+check_listener 8443 haproxy 'HAProxy SSH TLS'
+check_listener 9444 stunnel 'stunnel SSH TLS internal'
 if systemctl is-active --quiet stunnel4; then echo '[ OK ] stunnel4 service active'; else echo '[FAIL] stunnel4 service tidak aktif'; fail=1; fi
 assert_not_process 80 haproxy 'Nginx public HTTP'
 assert_not_process 443 nginx 'HAProxy public TLS'
+assert_not_process 8443 stunnel 'HAProxy public SSH TLS'
 if ss -H -lnt 'sport = :9443' 2>/dev/null | grep -E '0\.0\.0\.0:9443|\*:9443|\[::\]:9443' >/dev/null; then
   echo '[FAIL] Nginx TLS backend :9443 harus bind ke 127.0.0.1 saja.'
   fail=1
 fi
 # Ensure public web ports are not claimed by legacy stunnel/xray listeners.
-if ss -H -lntp 'sport = :80 or sport = :443' | grep -E 'stunnel|xray|dropbear' >/dev/null; then
+if ss -H -lntp 'sport = :80 or sport = :443 or sport = :8443' | grep -E 'stunnel|xray|dropbear' >/dev/null; then
   echo '[FAIL] Ditemukan service legacy mengambil port publik 80/443.'
   fail=1
 fi

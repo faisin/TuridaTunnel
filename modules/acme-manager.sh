@@ -3,12 +3,12 @@ set -Eeuo pipefail
 [[ $EUID -eq 0 ]] || { echo 'Jalankan sebagai root.' >&2; exit 1; }
 BASE=/root/.acme.sh/acme.sh
 DOMAIN_FILE=/etc/turidatunnel/domain
-WEBROOT=/home/vps/public_html
+WEBROOT=/var/www/turidatunnel-acme
 CERT_DIR=/etc/turidatunnel/certs
-install -d -m 0755 "$CERT_DIR" "$WEBROOT/.well-known/acme-challenge"
+install -d -o root -g www-data -m 0755 "$CERT_DIR" "$WEBROOT" "$WEBROOT/.well-known" "$WEBROOT/.well-known/acme-challenge"
+chmod 0755 /var /var/www "$WEBROOT" "$WEBROOT/.well-known" "$WEBROOT/.well-known/acme-challenge"
 [[ -s "$DOMAIN_FILE" ]] || { echo 'Domain belum diset.' >&2; exit 1; }
 DOMAIN="$(head -n1 "$DOMAIN_FILE")"
-SSH_SNI="ssh.${DOMAIN}"
 EMAIL="${ACME_EMAIL:-}"
 
 install_acme(){
@@ -48,14 +48,26 @@ HOOK
 issue(){
   local mode="${1:-webroot}"
   install_acme
+  # Verify that Nginx serves the exact ACME webroot before contacting the CA.
+  if [[ "$mode" == webroot ]]; then
+    local probe="turidatunnel-acme-probe-$$"
+    printf 'turidatunnel-acme-ok\n' >"$WEBROOT/.well-known/acme-challenge/$probe"
+    if ! curl -fsS --max-time 5 -H "Host: $DOMAIN" "http://127.0.0.1/.well-known/acme-challenge/$probe" | grep -qx 'turidatunnel-acme-ok'; then
+      rm -f "$WEBROOT/.well-known/acme-challenge/$probe"
+      echo 'Nginx tidak menyajikan webroot ACME dengan benar pada port 80.' >&2
+      echo "Periksa: http://$DOMAIN/.well-known/acme-challenge/" >&2
+      return 1
+    fi
+    rm -f "$WEBROOT/.well-known/acme-challenge/$probe"
+  fi
   case "$mode" in
     webroot)
-      "$BASE" --issue --server letsencrypt -d "$DOMAIN" -d "$SSH_SNI" -w "$WEBROOT" --keylength ec-256
+      "$BASE" --issue --server letsencrypt -d "$DOMAIN" -w "$WEBROOT" --keylength ec-256
       ;;
     standalone)
       # HTTP-01 standalone needs public TCP/80. Stop Nginx only for issuance.
       systemctl stop nginx || true
-      if ! "$BASE" --issue --server letsencrypt -d "$DOMAIN" -d "$SSH_SNI" --standalone --httpport 80 --keylength ec-256; then
+      if ! "$BASE" --issue --server letsencrypt -d "$DOMAIN" --standalone --httpport 80 --keylength ec-256; then
         systemctl start nginx || true
         return 1
       fi
