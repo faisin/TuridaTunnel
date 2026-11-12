@@ -71,3 +71,10 @@ Certbot menggunakan HTTP webroot pada port 80. Jika DNS belum benar atau port 80
 ## Pengujian
 
 Pemeriksaan sintaks Bash/Python dan konfigurasi Nginx dilakukan secara statis. Instalasi runtime penuh tetap perlu diuji pada VPS staging untuk setiap target OS sebelum dipakai pada server produksi.
+
+
+## HTTP / TLS routing and ACME
+
+Before installation, point both `your-domain` and `ssh.your-domain` A/AAAA records to the VPS. Nginx owns public HTTP :80. HAProxy owns public TCP :443 and routes TLS by SNI: `ssh.your-domain` to stunnel :8443 -> Dropbear :109, and the main domain to Nginx TLS 127.0.0.1:9443 -> Xray. HAProxy uses TLS passthrough; stunnel and Nginx terminate TLS on their respective backends.
+
+The installer issues a SAN certificate with acme.sh using HTTP-01 webroot. Standalone is also available after installation: `turidatunnel-acme standalone`; webroot: `turidatunnel-acme webroot`. Standalone temporarily stops Nginx and requires inbound TCP/80 to be reachable.

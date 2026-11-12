@@ -34,7 +34,7 @@ export DEBIAN_FRONTEND=noninteractive
 say "OS: ${PRETTY_NAME}"
 say 'Memasang dependensi dasar.'
 apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl wget unzip jq openssl socat cron iproute2 net-tools lsof procps psmisc dnsutils python3 nginx haproxy certbot
+apt-get install -y --no-install-recommends ca-certificates curl wget unzip jq openssl socat cron iproute2 net-tools lsof procps psmisc dnsutils python3 nginx haproxy stunnel4
 
 # Prefer a complete local checkout when setup.sh is run from an extracted ZIP.
 SOURCE_DIR=""
@@ -69,6 +69,10 @@ fi
 [[ -s "$INSTALL_DIR/ssh-vpn.sh" && -s "$INSTALL_DIR/ins-xray.sh" && -d "$INSTALL_DIR/modules" ]] || die 'File inti instalasi tidak lengkap.'
 
 install -d -m 0755 /etc/turidatunnel /etc/xray /home/vps/public_html /var/log/xray /usr/local/bin
+: > /dev/null
+touch /etc/turidatunnel/users.tsv
+chmod 0640 /etc/turidatunnel/users.tsv
+find "$INSTALL_DIR" -type f \( -name "*.sh" -o -name "*.py" \) -exec chmod 0755 {} +
 for script in "$INSTALL_DIR"/*.sh; do
   [[ -f "$script" ]] || continue
   name="$(basename "$script" .sh)"
@@ -79,6 +83,8 @@ for script in "$INSTALL_DIR"/modules/*.sh; do
   name="$(basename "$script" .sh)"
   ln -sfn "$script" "/usr/local/bin/turidatunnel-$name"
 done
+ln -sfn "$INSTALL_DIR/modules/acme-manager.sh" /usr/local/bin/turidatunnel-acme
+ln -sfn "$INSTALL_DIR/modules/unified-account-manager.sh" /usr/local/bin/turidatunnel-accounts
 
 if [[ -s /etc/turidatunnel/domain ]]; then
   DOMAIN="$(head -n1 /etc/turidatunnel/domain)"
@@ -101,7 +107,7 @@ printf '%s\n' 'TuridaTunnel HTTP bootstrap' > /home/vps/public_html/index.html
 say 'Memasang modul SSH/Dropbear.'
 bash "$INSTALL_DIR/ssh-vpn.sh"
 
-say 'Memasang Xray dan menghubungkan jalur TLS HAProxy -> Nginx internal.'
+say 'Memasang Xray, ACME, Nginx, HAProxy, dan jalur TLS melalui stunnel.'
 bash "$INSTALL_DIR/ins-xray.sh"
 
 cat >/etc/cron.d/turidatunnel-expiry <<EOF_EXPIRY
@@ -128,6 +134,9 @@ INSTALL_DIR=${INSTALL_DIR}
 NGINX_PUBLIC_PORT=80
 HAPROXY_PUBLIC_PORT=443
 HAPROXY_BACKEND=127.0.0.1:9443
+SSH_TLS_SNI=ssh.${DOMAIN}
+STUNNEL_BACKEND=127.0.0.1:109
+STUNNEL_LISTEN=127.0.0.1:8443
 SSH_PORT=22
 DROPBEAR_PORTS=109,143
 BADVPN_LISTEN=127.0.0.1:7300
@@ -137,7 +146,9 @@ TELEGRAM_BOT_TOKEN=disabled
 CLOUDFLARE_TOKEN=disabled
 EOF_CONF
 
+say 'Account center tersedia: turidatunnel-accounts.'
 say 'Instalasi selesai.'
-say 'Jalur publik: Nginx :80; HAProxy :443 -> Nginx TLS internal 127.0.0.1:9443 -> Xray localhost inbounds.'
+say 'Jalur HTTP: Nginx :80 -> SSH-WS/Dropbear dan Xray.'
+say 'Jalur TLS: HAProxy :443 (SNI ssh.DOMAIN -> stunnel -> Dropbear :109; SNI DOMAIN -> Nginx TLS 127.0.0.1:9443 -> Xray).'
 say 'SSH: OpenSSH :22; Dropbear :109 dan :143; BadVPN localhost :7300 (amd64).'
 say "Log instalasi: $LOG_FILE"

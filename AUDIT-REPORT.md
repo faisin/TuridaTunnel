@@ -66,3 +66,12 @@ Paket terbaru tidak berisi token OAuth lama. Namun file `rclone.conf` sebelumnya
 - Limit IP Xray menggunakan rolling lease dari log autentikasi (180 detik). Ini bukan deteksi socket aktif kernel yang presisi; sesi panjang tanpa koneksi baru dapat tidak tercermin.
 - Akun SSH Linux mendapat PAM `maxlogins` per pengguna. Ini membatasi sesi bersamaan, bukan IP unik. Quota trafik SSH per akun belum tersedia dan tidak boleh dianggap aktif.
 - Pengujian lokal: seluruh shell script lolos `bash -n`; Python controller dan relay lolos kompilasi; template JSON Xray menghasilkan 13 inbound yang valid secara sintaks JSON. Runtime Xray/Nginx/HAProxy dan koneksi klien belum diuji pada VPS.
+
+
+## TLS / stunnel routing update
+- Added `stunnel4` TLS wrapper for native SSH-over-TLS to Dropbear 109.
+- HAProxy now inspects ClientHello SNI: `ssh.<domain>` routes to stunnel 127.0.0.1:8443; main domain routes to Nginx TLS 127.0.0.1:9443.
+- Nginx remains public HTTP :80 and handles SSH WebSocket `/ssh` plus Xray WS/HTTPUpgrade/gRPC paths.
+- Added `acme.sh` manager with webroot and standalone HTTP-01 issuance and deploy hook.
+- DNS prerequisite: both the main domain and `ssh.<domain>` must resolve to the VPS.
+- HAProxy performs TLS passthrough/SNI routing; it does not decrypt TLS. Nginx and stunnel terminate TLS on their respective backends.

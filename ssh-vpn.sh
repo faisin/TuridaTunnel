@@ -11,7 +11,7 @@ case "${ID}:${VERSION_ID}" in
 esac
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y openssh-server dropbear-bin iproute2
+apt-get install -y openssh-server dropbear-bin stunnel4 iproute2
 
 # Preserve existing SSH security settings; do not replace the whole config.
 install -d -m 0755 /etc/ssh/sshd_config.d
@@ -64,6 +64,9 @@ systemctl daemon-reload
 systemctl reset-failed turidatunnel-dropbear.service 2>/dev/null || true
 systemctl enable --now turidatunnel-dropbear.service
 systemctl is-active --quiet turidatunnel-dropbear.service || { journalctl -u turidatunnel-dropbear -n 40 --no-pager; exit 1; }
+
+# stunnel TLS wrapper is configured after ACME certificate issuance in ins-xray.sh.
+install -d -m 0755 /etc/stunnel
 
 # Python 3 WebSocket relay: Nginx :80 / HAProxy :443 -> local :2082 -> Dropbear :109.
 BASE_DIR="$(dirname "$(readlink -f "$0")")"

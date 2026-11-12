@@ -11,7 +11,7 @@ case "${ID}:${VERSION_ID}" in
 esac
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y curl ca-certificates unzip jq openssl nginx haproxy certbot
+apt-get install -y curl ca-certificates unzip jq openssl nginx haproxy stunnel4 socat
 
 install -d -m 0755 /etc/turidatunnel /etc/xray /var/log/xray /home/vps/public_html
 DOMAIN="$(head -n1 /etc/turidatunnel/domain 2>/dev/null || true)"
@@ -40,37 +40,21 @@ nginx -t
 systemctl enable --now nginx
 
 if [[ "$DOMAIN" =~ ^[0-9.]+$ ]] || [[ "$DOMAIN" == *:* ]]; then
-  echo 'Domain berupa IP: memakai self-signed certificate; TLS client tidak akan trusted secara default.'
-  openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 365 \
+  echo 'ACME memerlukan nama domain DNS; domain berupa IP tidak dapat diterbitkan sertifikat publik.'
+  openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 30 \
     -subj "/CN=$DOMAIN" -keyout /etc/xray/xray.key -out /etc/xray/xray.crt
+  cat /etc/xray/xray.crt /etc/xray/xray.key >/etc/stunnel/turidatunnel.pem
 else
-  if certbot certonly --webroot -w /home/vps/public_html --non-interactive --agree-tos \
-      --register-unsafely-without-email -d "$DOMAIN"; then
-    install -m 0644 "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" /etc/xray/xray.crt
-    install -m 0640 "/etc/letsencrypt/live/$DOMAIN/privkey.pem" /etc/xray/xray.key
-  else
-    echo 'ACME gagal; membuat sertifikat self-signed sementara.'
-    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 30 \
-      -subj "/CN=$DOMAIN" -keyout /etc/xray/xray.key -out /etc/xray/xray.crt
-  fi
+  # Default issuance uses Nginx webroot. If DNS for ssh.<domain> is not ready,
+  # user can rerun: turidatunnel-acme standalone or webroot after fixing DNS.
+  bash "$(dirname "$(readlink -f "$0")")/modules/acme-manager.sh" webroot || {
+    echo 'Penerbitan ACME webroot gagal. Periksa DNS A/AAAA untuk domain dan ssh.domain, lalu jalankan turidatunnel-acme webroot.' >&2
+    exit 1
+  }
 fi
 chown root:www-data /etc/xray/xray.key
 chmod 0640 /etc/xray/xray.key
 chmod 0644 /etc/xray/xray.crt
-# Certbot deploy hook refreshes the Nginx backend certificate after automatic renewal.
-install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
-cat >/etc/letsencrypt/renewal-hooks/deploy/turidatunnel.sh <<'HOOK'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-DOMAIN="$(head -n1 /etc/turidatunnel/domain)"
-if [[ -s "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" && -s "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" ]]; then
-  install -m 0644 "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" /etc/xray/xray.crt
-  install -m 0640 "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" /etc/xray/xray.key
-  chown root:www-data /etc/xray/xray.key
-  systemctl reload nginx
-fi
-HOOK
-chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/turidatunnel.sh
 
 ARCH="$(dpkg --print-architecture)"
 case "$ARCH" in
@@ -207,7 +191,29 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 UNIT
 
-cat >/etc/haproxy/haproxy.cfg <<'HAPROXY'
+SSH_TLS_SNI="ssh.${DOMAIN}"
+cat >/etc/stunnel/turidatunnel.conf <<EOFST
+foreground = no
+pid = /run/stunnel4.pid
+setuid = stunnel4
+setgid = stunnel4
+[turidatunnel-dropbear]
+accept = 127.0.0.1:8443
+connect = 127.0.0.1:109
+cert = /etc/stunnel/turidatunnel.pem
+TIMEOUTclose = 0
+EOFST
+chmod 0640 /etc/stunnel/turidatunnel.conf
+# Ubuntu/Debian stunnel4 package uses /etc/default/stunnel4 to enable custom config.
+if [[ -f /etc/default/stunnel4 ]]; then
+  sed -i 's/^ENABLED=.*/ENABLED=1/' /etc/default/stunnel4
+  if grep -q '^FILES=' /etc/default/stunnel4; then
+    sed -i 's#^FILES=.*#FILES="/etc/stunnel/turidatunnel.conf"#' /etc/default/stunnel4
+  else
+    echo 'FILES="/etc/stunnel/turidatunnel.conf"' >>/etc/default/stunnel4
+  fi
+fi
+cat >/etc/haproxy/haproxy.cfg <<EOFHAP
 global
     log /dev/log local0
     daemon
@@ -225,11 +231,21 @@ defaults
 
 frontend turidatunnel_tls_in
     bind :443
-    default_backend turidatunnel_tls_backend
+    mode tcp
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req.ssl_hello_type 1 }
+    acl sni_ssh req.ssl_sni -i ${SSH_TLS_SNI}
+    use_backend turidatunnel_ssh_tls if sni_ssh
+    default_backend turidatunnel_xray_tls
 
-backend turidatunnel_tls_backend
+backend turidatunnel_ssh_tls
+    mode tcp
+    server stunnel_ssh 127.0.0.1:8443 check
+
+backend turidatunnel_xray_tls
+    mode tcp
     server nginx_tls 127.0.0.1:9443 check
-HAPROXY
+EOFHAP
 
 chown -R www-data:www-data /var/log/xray
 nginx -t
@@ -237,7 +253,11 @@ haproxy -c -f /etc/haproxy/haproxy.cfg
 /usr/local/bin/xray run -test -config /etc/xray/config.json
 systemctl daemon-reload
 systemctl enable --now xray nginx haproxy
-systemctl restart nginx xray haproxy
-printf '\nXray ready. HTTP :80 -> Nginx; TLS :443 -> HAProxy -> Nginx 127.0.0.1:9443.\n'
+systemctl enable stunnel4
+systemctl restart nginx xray
+systemctl restart stunnel4
+systemctl restart haproxy
+printf '\nXray ready. HTTP :80 -> Nginx; TLS :443 -> HAProxy SNI route: ssh.${DOMAIN} -> stunnel 127.0.0.1:8443 -> Dropbear :109; ${DOMAIN} -> Nginx TLS 127.0.0.1:9443 -> Xray.\n'
 printf 'Domain: %s\n' "$DOMAIN"
+printf 'SSH TLS SNI: ssh.%s (DNS A/AAAA wajib mengarah ke VPS)\n' "$DOMAIN"
 printf 'Account manager: /opt/turidatunnel/modules/account-manager.sh\n'
