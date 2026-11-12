@@ -42,8 +42,15 @@ NGINX
 sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN}/" /etc/nginx/sites-available/turidatunnel.conf
 rm -f /etc/nginx/sites-enabled/default
 ln -sfn /etc/nginx/sites-available/turidatunnel.conf /etc/nginx/sites-enabled/turidatunnel.conf
+# Apply the newly written ACME vhost before the ACME manager probes it.
+# `enable --now` does not reload an already-running Nginx process.
 nginx -t
-systemctl enable --now nginx
+systemctl enable nginx
+if systemctl is-active --quiet nginx; then
+  systemctl reload nginx
+else
+  systemctl start nginx
+fi
 
 if [[ "$DOMAIN" =~ ^[0-9.]+$ ]] || [[ "$DOMAIN" == *:* ]]; then
   echo 'ACME memerlukan nama domain DNS; domain berupa IP tidak dapat diterbitkan sertifikat publik.'
