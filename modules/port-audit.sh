@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 fail=0
+
 assert_not_process(){
   local port="$1" forbidden="$2" label="$3" output
   output="$(ss -H -lntp "sport = :${port}" 2>/dev/null || true)"
@@ -10,13 +11,19 @@ assert_not_process(){
     fail=1
   fi
 }
+
 check_listener(){
   local port="$1" expected="$2" label="$3" output
   output="$(ss -H -lntp "sport = :${port}" 2>/dev/null || true)"
   if [[ -z "$output" ]]; then
-    printf '[WARN] %-18s port %s belum listen (modul belum aktif?)\n' "$label" "$port"
-    return 0
+    # Coba fallback tanpa -p jika gagal mendeteksi proses
+    output="$(ss -H -lnt "sport = :${port}" 2>/dev/null || true)"
+    if [[ -z "$output" ]]; then
+      printf '[WARN] %-18s port %s belum listen (modul belum aktif?)\n' "$label" "$port"
+      return 0
+    fi
   fi
+  
   if [[ "$output" == *"${expected}"* ]]; then
     printf '[ OK ] %-18s port %s\n' "$label" "$port"
   else
@@ -24,6 +31,11 @@ check_listener(){
     fail=1
   fi
 }
+
+# Jalankan sebagai root
+[[ ${EUID:-$(id -u)} -eq 0 ]] || { echo '[FAIL] Port audit harus dijalankan sebagai root.'; exit 1; }
+
+echo "=== Mulai Audit Port TuridaTunnel ==="
 check_listener 80 nginx 'Nginx HTTP'
 check_listener 443 haproxy 'HAProxy TLS'
 check_listener 9443 nginx 'Nginx TLS internal'
@@ -33,17 +45,33 @@ check_listener 143 dropbear 'Dropbear 143'
 check_listener 2082 python3 'SSH-WS relay'
 check_listener 8443 haproxy 'HAProxy SSH TLS'
 check_listener 9444 stunnel 'stunnel SSH TLS internal'
-if systemctl is-active --quiet stunnel4; then echo '[ OK ] stunnel4 service active'; else echo '[FAIL] stunnel4 service tidak aktif'; fail=1; fi
+
+if systemctl is-active --quiet stunnel4 || systemctl is-active --quiet stunnel; then 
+  echo '[ OK ] stunnel service active' 
+else 
+  echo '[FAIL] stunnel service tidak aktif'
+  fail=1 
+fi
+
 assert_not_process 80 haproxy 'Nginx public HTTP'
 assert_not_process 443 nginx 'HAProxy public TLS'
 assert_not_process 8443 stunnel 'HAProxy public SSH TLS'
+
 if ss -H -lnt 'sport = :9443' 2>/dev/null | grep -E '0\.0\.0\.0:9443|\*:9443|\[::\]:9443' >/dev/null; then
   echo '[FAIL] Nginx TLS backend :9443 harus bind ke 127.0.0.1 saja.'
   fail=1
 fi
+
 # Ensure public web ports are not claimed by legacy stunnel/xray listeners.
-if ss -H -lntp 'sport = :80 or sport = :443 or sport = :8443' | grep -E 'stunnel|xray|dropbear' >/dev/null; then
+if ss -H -lntp 'sport = :80 or sport = :443 or sport = :8443' 2>/dev/null | grep -E 'stunnel|xray|dropbear' >/dev/null; then
   echo '[FAIL] Ditemukan service legacy mengambil port publik 80/443.'
   fail=1
 fi
+
+if [[ "$fail" -eq 0 ]]; then
+  echo "=== Audit Port Selesai: Semua Aman ==="
+else
+  echo "=== Audit Port Gagal: Ditemukan Konflik ==="
+fi
+
 exit "$fail"
