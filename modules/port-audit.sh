@@ -31,6 +31,8 @@ check_listener 22 sshd 'OpenSSH'
 check_listener 109 dropbear 'Dropbear 109'
 check_listener 143 dropbear 'Dropbear 143'
 check_listener 2082 python3 'SSH-WS relay'
+check_listener 8443 stunnel 'stunnel SSH TLS'
+if systemctl is-active --quiet stunnel4; then echo '[ OK ] stunnel4 service active'; else echo '[FAIL] stunnel4 service tidak aktif'; fail=1; fi
 assert_not_process 80 haproxy 'Nginx public HTTP'
 assert_not_process 443 nginx 'HAProxy public TLS'
 if ss -H -lnt 'sport = :9443' 2>/dev/null | grep -E '0\.0\.0\.0:9443|\*:9443|\[::\]:9443' >/dev/null; then
