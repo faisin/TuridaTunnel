@@ -54,14 +54,13 @@ if [[ -s /etc/turidatunnel/domain ]]; then
 elif [[ -s /etc/xray/domain ]]; then
   DOMAIN="$(head -n1 /etc/xray/domain)"
 else
-  read -rp 'Masukkan domain yang DNS A/AAAA-nya sudah mengarah ke IP VPS: ' DOMAIN
+  if [[ -r /dev/tty ]]; then read -rp 'Masukkan domain yang DNS A/AAAA-nya sudah mengarah ke IP VPS: ' DOMAIN </dev/tty; else die 'Domain belum diset. Buat /etc/turidatunnel/domain sebelum instalasi non-interaktif.'; fi
 fi
 [[ -n "$DOMAIN" ]] || die 'Domain tidak boleh kosong.'
 [[ "$DOMAIN" =~ ^[A-Za-z0-9.:-]+$ ]] || die 'Format domain/IP tidak valid.'
 printf '%s\n' "$DOMAIN" > /etc/turidatunnel/domain
 printf '%s\n' "$DOMAIN" > /etc/xray/domain
-install -d -m 0755 /var/lib/scrz-prem
-printf 'IP=%s\n' "$DOMAIN" > /var/lib/scrz-prem/ipvps.conf
+# No legacy IP-registration file is created.
 printf '%s\n' 'TuridaTunnel HTTP bootstrap' > /home/vps/public_html/index.html
 
 say 'Memasang modul SSH/Dropbear.'
@@ -77,6 +76,12 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF3
 chmod 0644 /etc/cron.d/turidatunnel-expiry
 systemctl enable --now cron
+
+say 'Mengaktifkan enforcement quota dan limit IP Xray.'
+install -m 0644 "$INSTALL_DIR/modules/turidatunnel-limits.service" /etc/systemd/system/turidatunnel-limits.service
+install -m 0644 "$INSTALL_DIR/modules/turidatunnel-limits.timer" /etc/systemd/system/turidatunnel-limits.timer
+systemctl daemon-reload
+systemctl enable --now turidatunnel-limits.timer
 
 say 'Menjalankan audit port.'
 bash "$INSTALL_DIR/modules/port-audit.sh" || die 'Audit port menemukan konflik.'

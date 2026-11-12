@@ -91,6 +91,7 @@ install -m 0755 "$TMP/unpacked/xray" /usr/local/bin/xray
 port(){ while :; do p="$(shuf -i 20000-45000 -n1)"; ss -H -lnt "sport = :$p" | grep -q . || { echo "$p"; return; }; done; }
 VLESS_WS=$(port); VMESS_WS=$(port); TROJAN_WS=$(port); SS_WS=$(port)
 VLESS_GRPC=$(port); VMESS_GRPC=$(port); TROJAN_GRPC=$(port); SS_GRPC=$(port)
+VLESS_HU=$(port); VMESS_HU=$(port); TROJAN_HU=$(port); SS_HU=$(port)
 cat >/etc/turidatunnel/xray.env <<EOF2
 DOMAIN='$DOMAIN'
 VLESS_WS='$VLESS_WS'
@@ -101,15 +102,23 @@ VLESS_GRPC='$VLESS_GRPC'
 VMESS_GRPC='$VMESS_GRPC'
 TROJAN_GRPC='$TROJAN_GRPC'
 SS_GRPC='$SS_GRPC'
+VLESS_HU='$VLESS_HU'
+VMESS_HU='$VMESS_HU'
+TROJAN_HU='$TROJAN_HU'
+SS_HU='$SS_HU'
 EOF2
 chmod 0600 /etc/turidatunnel/xray.env
 
 jq -n \
   --argjson vws "$VLESS_WS" --argjson mws "$VMESS_WS" --argjson tws "$TROJAN_WS" --argjson sws "$SS_WS" \
-  --argjson vgrpc "$VLESS_GRPC" --argjson mgrpc "$VMESS_GRPC" --argjson tgrpc "$TROJAN_GRPC" --argjson sgrpc "$SS_GRPC" '
+  --argjson vgrpc "$VLESS_GRPC" --argjson mgrpc "$VMESS_GRPC" --argjson tgrpc "$TROJAN_GRPC" --argjson sgrpc "$SS_GRPC" --argjson vhu "$VLESS_HU" --argjson mhu "$VMESS_HU" --argjson thu "$TROJAN_HU" --argjson shu "$SS_HU" '
 {
-  log:{access:"/var/log/xray/access.log",error:"/var/log/xray/error.log",loglevel:"warning"},
+  log:{access:"/var/log/xray/access.log",error:"/var/log/xray/error.log",loglevel:"info"},
+  api:{tag:"api",services:["StatsService"]},
+  stats:{},
+  policy:{levels:{"0":{"statsUserUplink":true,"statsUserDownlink":true}}},
   inbounds:[
+    {tag:"api-in",listen:"127.0.0.1",port:10085,protocol:"dokodemo-door",settings:{address:"127.0.0.1"}},
     {tag:"vless-ws",listen:"127.0.0.1",port:$vws,protocol:"vless",settings:{clients:[],decryption:"none"},streamSettings:{network:"ws",wsSettings:{path:"/vless"}}},
     {tag:"vmess-ws",listen:"127.0.0.1",port:$mws,protocol:"vmess",settings:{clients:[],disableInsecureEncryption:true},streamSettings:{network:"ws",wsSettings:{path:"/vmess"}}},
     {tag:"trojan-ws",listen:"127.0.0.1",port:$tws,protocol:"trojan",settings:{clients:[],udp:true},streamSettings:{network:"ws",wsSettings:{path:"/trojan-ws"}}},
@@ -117,9 +126,14 @@ jq -n \
     {tag:"vless-grpc",listen:"127.0.0.1",port:$vgrpc,protocol:"vless",settings:{clients:[],decryption:"none"},streamSettings:{network:"grpc",grpcSettings:{serviceName:"vless-grpc"}}},
     {tag:"vmess-grpc",listen:"127.0.0.1",port:$mgrpc,protocol:"vmess",settings:{clients:[],disableInsecureEncryption:true},streamSettings:{network:"grpc",grpcSettings:{serviceName:"vmess-grpc"}}},
     {tag:"trojan-grpc",listen:"127.0.0.1",port:$tgrpc,protocol:"trojan",settings:{clients:[],udp:true},streamSettings:{network:"grpc",grpcSettings:{serviceName:"trojan-grpc"}}},
-    {tag:"ss-grpc",listen:"127.0.0.1",port:$sgrpc,protocol:"shadowsocks",settings:{clients:[],network:"tcp,udp"},streamSettings:{network:"grpc",grpcSettings:{serviceName:"ss-grpc"}}}
+    {tag:"ss-grpc",listen:"127.0.0.1",port:$sgrpc,protocol:"shadowsocks",settings:{clients:[],network:"tcp,udp"},streamSettings:{network:"grpc",grpcSettings:{serviceName:"ss-grpc"}}},
+    {tag:"vless-hu",listen:"127.0.0.1",port:$vhu,protocol:"vless",settings:{clients:[],decryption:"none"},streamSettings:{network:"httpupgrade",httpupgradeSettings:{path:"/vless-hu",host:""}}},
+    {tag:"vmess-hu",listen:"127.0.0.1",port:$mhu,protocol:"vmess",settings:{clients:[],disableInsecureEncryption:true},streamSettings:{network:"httpupgrade",httpupgradeSettings:{path:"/vmess-hu",host:""}}},
+    {tag:"trojan-hu",listen:"127.0.0.1",port:$thu,protocol:"trojan",settings:{clients:[],udp:true},streamSettings:{network:"httpupgrade",httpupgradeSettings:{path:"/trojan-hu",host:""}}},
+    {tag:"ss-hu",listen:"127.0.0.1",port:$shu,protocol:"shadowsocks",settings:{clients:[],network:"tcp,udp"},streamSettings:{network:"httpupgrade",httpupgradeSettings:{path:"/ss-hu",host:""}}}
   ],
-  outbounds:[{protocol:"freedom",tag:"direct"},{protocol:"blackhole",tag:"blocked"}]
+  outbounds:[{protocol:"freedom",tag:"direct"},{protocol:"blackhole",tag:"blocked"},{protocol:"freedom",tag:"api"}],
+  routing:{rules:[{type:"field",inboundTag:["api-in"],outboundTag:"api"}]}
 }' > /etc/xray/config.json
 chown root:www-data /etc/xray/config.json
 chmod 0640 /etc/xray/config.json
@@ -151,6 +165,10 @@ server {
     location = /vmess { proxy_pass http://127.0.0.1:${VMESS_WS}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
     location = /trojan-ws { proxy_pass http://127.0.0.1:${TROJAN_WS}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
     location = /ss-ws { proxy_pass http://127.0.0.1:${SS_WS}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
+    location = /vless-hu { proxy_pass http://127.0.0.1:${VLESS_HU}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
+    location = /vmess-hu { proxy_pass http://127.0.0.1:${VMESS_HU}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
+    location = /trojan-hu { proxy_pass http://127.0.0.1:${TROJAN_HU}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
+    location = /ss-hu { proxy_pass http://127.0.0.1:${SS_HU}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
     location ^~ /vless-grpc { grpc_pass grpc://127.0.0.1:${VLESS_GRPC}; }
     location ^~ /vmess-grpc { grpc_pass grpc://127.0.0.1:${VMESS_GRPC}; }
     location ^~ /trojan-grpc { grpc_pass grpc://127.0.0.1:${TROJAN_GRPC}; }

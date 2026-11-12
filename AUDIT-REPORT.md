@@ -56,3 +56,13 @@ Installer memvalidasi Debian 12/13 dan Ubuntu 22.04/24.04/26.04. Pengujian stati
 ## Tindakan keamanan penting
 
 Paket terbaru tidak berisi token OAuth lama. Namun file `rclone.conf` sebelumnya pernah memuat access token dan refresh token. Cabut/revoke token tersebut pada penyedia Google/Drive terkait. Penghapusan file dari paket baru tidak menghapus salinan dari riwayat Git, ZIP lama, atau perangkat lain.
+
+## Perbaikan lanjutan 2026-11-12
+
+- Installer memakai `/dev/tty` untuk prompt domain sehingga tetap interaktif ketika dipanggil melalui `wget -O- ... | bash` atau `curl ... | bash`; mode non-interaktif meminta domain sudah disediakan pada `/etc/turidatunnel/domain`.
+- Modul SSH membuat host key Dropbear RSA/ECDSA/ED25519 sebelum service dijalankan, menghindari kegagalan `No hostkeys available` yang ditemukan pada VPS.
+- Xray menambahkan 4 inbound HTTPUpgrade (VLESS, VMess, Trojan, Shadowsocks), routing Nginx, dan Stats API loopback.
+- Account manager menyimpan quota GB dan batas IP untuk akun Xray. Controller menyimpan akumulasi byte di disk, memeriksa quota per menit, dan mencabut akun saat quota habis.
+- Limit IP Xray menggunakan rolling lease dari log autentikasi (180 detik). Ini bukan deteksi socket aktif kernel yang presisi; sesi panjang tanpa koneksi baru dapat tidak tercermin.
+- Akun SSH Linux mendapat PAM `maxlogins` per pengguna. Ini membatasi sesi bersamaan, bukan IP unik. Quota trafik SSH per akun belum tersedia dan tidak boleh dianggap aktif.
+- Pengujian lokal: seluruh shell script lolos `bash -n`; Python controller dan relay lolos kompilasi; template JSON Xray menghasilkan 13 inbound yang valid secara sintaks JSON. Runtime Xray/Nginx/HAProxy dan koneksi klien belum diuji pada VPS.

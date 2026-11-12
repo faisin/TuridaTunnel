@@ -29,6 +29,16 @@ systemctl restart ssh
 
 # Disable distro Dropbear service to prevent duplicate listeners.
 systemctl disable --now dropbear 2>/dev/null || true
+# Generate persistent host keys before systemd starts Dropbear. This fixes the
+# observed fresh-install failure: "No hostkeys available".
+install -d -m 0700 /etc/dropbear
+for key_type in rsa ecdsa ed25519; do
+  key_file="/etc/dropbear/dropbear_${key_type}_host_key"
+  if [[ ! -s "$key_file" ]]; then
+    dropbearkey -t "$key_type" -f "$key_file"
+  fi
+  chmod 0600 "$key_file"
+done
 cat >/etc/systemd/system/turidatunnel-dropbear.service <<'UNIT'
 [Unit]
 Description=TuridaTunnel Dropbear SSH service
@@ -37,7 +47,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/dropbear -F -E -p 109 -p 143
+ExecStart=/usr/sbin/dropbear -F -E -R -p 109 -p 143
 Restart=on-failure
 RestartSec=2
 
@@ -51,7 +61,9 @@ if [[ ! -x /usr/sbin/dropbear ]]; then
   sed -i "s#^ExecStart=.*#ExecStart=${DROPBEAR_BIN} -F -E -p 109 -p 143#" /etc/systemd/system/turidatunnel-dropbear.service
 fi
 systemctl daemon-reload
+systemctl reset-failed turidatunnel-dropbear.service 2>/dev/null || true
 systemctl enable --now turidatunnel-dropbear.service
+systemctl is-active --quiet turidatunnel-dropbear.service || { journalctl -u turidatunnel-dropbear -n 40 --no-pager; exit 1; }
 
 # Python 3 WebSocket relay: Nginx :80 / HAProxy :443 -> local :2082 -> Dropbear :109.
 BASE_DIR="$(dirname "$(readlink -f "$0")")"

@@ -41,7 +41,9 @@ Menu utama: `menu`.
 - Restart layanan: `restart`
 - Audit port: `turidatunnel-port-audit`
 
-Akun Xray dibuat/dihapus melalui `modules/account-manager.sh`; masa aktif disimpan terpisah dan diperiksa setiap hari oleh cron.
+Akun Xray dibuat/dihapus melalui `modules/account-manager.sh`. Setiap akun dapat diberi masa aktif, quota GB (0 = tanpa batas), dan batas sumber IP. `modules/enforce-limits.py` membaca Xray Stats API setiap menit, menyimpan akumulasi byte lokal lintas restart, lalu mencabut akun ketika quota habis. Pengendalian IP memakai lease dari log autentikasi Xray dengan jendela 180 detik; ini adalah pengaman rolling-IP, bukan pelacakan socket aktif kernel yang presisi.
+
+Akun Linux dibuat melalui `usernew.sh`; `maxlogins` PAM membatasi sesi SSH bersamaan per akun (bukan jumlah IP yang presisi). **Quota trafik per akun SSH/Dropbear belum ditegakkan oleh versi ini** karena OpenSSH/Dropbear tidak menyediakan accounting byte per identitas yang setara dengan Xray Stats API. Jangan menganggap quota Xray berlaku untuk akun SSH.
 
 ## Binary
 
@@ -58,6 +60,13 @@ Cloudflare automation, GitHub backup otomatis, dan Telegram bot dinonaktifkan. B
 ## Catatan sertifikat
 
 Certbot menggunakan HTTP webroot pada port 80. Jika DNS belum benar atau port 80 tidak dapat dijangkau, installer membuat sertifikat self-signed sementara. Koneksi TLS publik memerlukan sertifikat Let's Encrypt yang valid.
+
+## Batasan enforcement
+
+- Quota GB Xray: ditegakkan melalui Stats API dan controller berkala.
+- Limit IP Xray: berbasis IP sumber yang tercatat pada access log dalam jendela 180 detik; akun dicabut jika melampaui batas.
+- SSH/Dropbear: PAM `maxlogins` membatasi sesi bersamaan; bukan IP unik. Quota trafik SSH per akun belum tersedia.
+- HTTPUpgrade untuk VMess/VLESS/Trojan/Shadowsocks disediakan sebagai inbound terpisah. Dukungan URI/client Shadowsocks HTTPUpgrade tidak seragam; konfigurasi klien perlu mendukung transport Xray HTTPUpgrade.
 
 ## Pengujian
 
