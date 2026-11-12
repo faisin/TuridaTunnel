@@ -13,7 +13,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y curl ca-certificates unzip jq openssl nginx haproxy stunnel4 socat
 
-install -d -m 0755 /etc/turidatunnel /etc/xray /var/log/xray /home/vps/public_html
+install -d -m 0755 /etc/turidatunnel /etc/xray /var/log/xray /var/www/turidatunnel-acme/.well-known/acme-challenge
 DOMAIN="$(head -n1 /etc/turidatunnel/domain 2>/dev/null || true)"
 if [[ -z "$DOMAIN" ]]; then read -rp 'Domain DNS A/AAAA menuju VPS: ' DOMAIN; fi
 [[ -n "$DOMAIN" ]] || { echo 'Domain wajib diisi.' >&2; exit 1; }
@@ -26,14 +26,20 @@ cat >/etc/nginx/sites-available/turidatunnel.conf <<'NGINX'
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
-    server_name _;
-    root /home/vps/public_html;
+    server_name DOMAIN_PLACEHOLDER _;
+    root /var/www/turidatunnel-acme;
     index index.html;
     server_tokens off;
-    location ^~ /.well-known/acme-challenge/ { try_files $uri =404; }
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/turidatunnel-acme;
+        default_type text/plain;
+        allow all;
+        try_files $uri =404;
+    }
     location / { try_files $uri $uri/ =404; }
 }
 NGINX
+sed -i "s/DOMAIN_PLACEHOLDER/${DOMAIN}/" /etc/nginx/sites-available/turidatunnel.conf
 rm -f /etc/nginx/sites-enabled/default
 ln -sfn /etc/nginx/sites-available/turidatunnel.conf /etc/nginx/sites-enabled/turidatunnel.conf
 nginx -t
@@ -48,7 +54,7 @@ else
   # Default issuance uses Nginx webroot. If DNS for ssh.<domain> is not ready,
   # user can rerun: turidatunnel-acme standalone or webroot after fixing DNS.
   bash "$(dirname "$(readlink -f "$0")")/modules/acme-manager.sh" webroot || {
-    echo 'Penerbitan ACME webroot gagal. Periksa DNS A/AAAA untuk domain dan ssh.domain, lalu jalankan turidatunnel-acme webroot.' >&2
+    echo 'Penerbitan ACME webroot gagal. Periksa DNS A/AAAA untuk domain utama, lalu jalankan turidatunnel-acme webroot.' >&2
     exit 1
   }
 fi
@@ -137,13 +143,18 @@ server {
     listen [::]:80 default_server;
     $TLS_LISTEN
     $HTTP2_DIRECTIVE
-    server_name _;
-    root /home/vps/public_html;
+    server_name ${DOMAIN};
+    root /var/www/turidatunnel-acme;
     ssl_certificate /etc/xray/xray.crt;
     ssl_certificate_key /etc/xray/xray.key;
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
-    location ^~ /.well-known/acme-challenge/ { try_files \$uri =404; }
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/turidatunnel-acme;
+        default_type text/plain;
+        allow all;
+        try_files \$uri =404;
+    }
     location = /ssh { proxy_pass http://127.0.0.1:2082; include /etc/nginx/snippets/turidatunnel-ws.conf; }
     location = /vless { proxy_pass http://127.0.0.1:${VLESS_WS}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
     location = /vmess { proxy_pass http://127.0.0.1:${VMESS_WS}; include /etc/nginx/snippets/turidatunnel-ws.conf; }
@@ -191,14 +202,15 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 UNIT
 
-SSH_TLS_SNI="ssh.${DOMAIN}"
+SSH_TLS_PORT=8443
+STUNNEL_BACKEND_PORT=9444
 cat >/etc/stunnel/turidatunnel.conf <<EOFST
 foreground = no
 pid = /run/stunnel4.pid
 setuid = stunnel4
 setgid = stunnel4
 [turidatunnel-dropbear]
-accept = 127.0.0.1:8443
+accept = 127.0.0.1:${STUNNEL_BACKEND_PORT}
 connect = 127.0.0.1:109
 cert = /etc/stunnel/turidatunnel.pem
 TIMEOUTclose = 0
@@ -229,18 +241,19 @@ defaults
     timeout client 1h
     timeout server 1h
 
-frontend turidatunnel_tls_in
+frontend turidatunnel_xray_tls_in
     bind :443
     mode tcp
-    tcp-request inspect-delay 5s
-    tcp-request content accept if { req.ssl_hello_type 1 }
-    acl sni_ssh req.ssl_sni -i ${SSH_TLS_SNI}
-    use_backend turidatunnel_ssh_tls if sni_ssh
     default_backend turidatunnel_xray_tls
+
+frontend turidatunnel_ssh_tls_in
+    bind :8443
+    mode tcp
+    default_backend turidatunnel_ssh_tls
 
 backend turidatunnel_ssh_tls
     mode tcp
-    server stunnel_ssh 127.0.0.1:8443 check
+    server stunnel_ssh 127.0.0.1:${STUNNEL_BACKEND_PORT} check
 
 backend turidatunnel_xray_tls
     mode tcp
@@ -257,7 +270,7 @@ systemctl enable stunnel4
 systemctl restart nginx xray
 systemctl restart stunnel4
 systemctl restart haproxy
-printf '\nXray ready. HTTP :80 -> Nginx; TLS :443 -> HAProxy SNI route: ssh.${DOMAIN} -> stunnel 127.0.0.1:8443 -> Dropbear :109; ${DOMAIN} -> Nginx TLS 127.0.0.1:9443 -> Xray.\n'
+printf '\nXray ready. HTTP :80 -> Nginx; TLS :443 ${DOMAIN} -> HAProxy -> Nginx TLS 127.0.0.1:9443 -> Xray; SSH TLS ${DOMAIN}:8443 -> HAProxy -> stunnel 127.0.0.1:${STUNNEL_BACKEND_PORT} -> Dropbear :109.\n'
 printf 'Domain: %s\n' "$DOMAIN"
-printf 'SSH TLS SNI: ssh.%s (DNS A/AAAA wajib mengarah ke VPS)\n' "$DOMAIN"
+printf 'SSH TLS: %s:8443 (gunakan DNS utama yang sama)\n' "$DOMAIN"
 printf 'Account manager: /opt/turidatunnel/modules/account-manager.sh\n'

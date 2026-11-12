@@ -1,25 +1,25 @@
 # TuridaTunnel TLS routing
 
-## DNS prerequisites
+## DNS prerequisite
 
-Create both records pointing to this VPS before ACME issuance:
+Create one DNS record pointing to this VPS:
 
-- `sop.adyersasak.my.id` A/AAAA -> VPS public IP (Xray HTTPS endpoint)
-- `ssh.sop.adyersasak.my.id` A/AAAA -> VPS public IP (native SSH-over-TLS endpoint)
+- `sop.adyersasak.my.id` A/AAAA -> VPS public IP
 
-The SSH TLS endpoint uses a dedicated SNI name because HAProxy TCP passthrough cannot route encrypted HTTP paths before TLS termination. A single SNI hostname cannot reliably distinguish arbitrary HTTPS/Xray traffic from raw SSH-over-TLS.
+The same hostname is used for Xray TLS and SSH-over-TLS. No `ssh.<domain>` DNS record or second certificate name is required.
 
 ## Traffic flow
 
 - Public TCP/80: Nginx HTTP. `/ssh` -> WebSocket relay -> Dropbear `127.0.0.1:109`; Xray WS/HTTPUpgrade/gRPC paths -> their loopback Xray inbounds.
-- Public TCP/443: HAProxy TCP/TLS SNI router (TLS passthrough). `ssh.sop.adyersasak.my.id` -> stunnel `127.0.0.1:8443` -> Dropbear `127.0.0.1:109`. Main domain -> Nginx TLS `127.0.0.1:9443` -> Xray loopback inbounds.
+- Public TCP/443: HAProxy TCP passthrough -> Nginx TLS `127.0.0.1:9443` -> Xray loopback inbounds.
+- Public TCP/8443: HAProxy TCP passthrough -> stunnel `127.0.0.1:9444` -> Dropbear `127.0.0.1:109`. SSH TLS clients use the same domain with port `8443`.
 - OpenSSH remains on TCP/22; Dropbear also listens directly on TCP/109 and TCP/143.
 
-HAProxy owns the public 443 socket and routes TLS by SNI. TLS is terminated by stunnel for the SSH SNI and by Nginx for the main domain. This is TLS passthrough at HAProxy, not TLS termination there.
+Separate ports distinguish the two encrypted services because the same SNI hostname on the same TCP port cannot reliably distinguish arbitrary HTTPS/Xray traffic from raw SSH-over-TLS. HAProxy does not terminate TLS; Nginx and stunnel do.
 
 ## ACME
 
-`modules/acme-manager.sh` supports `webroot` (default) and `standalone`. Both issue one SAN certificate for the main domain and `ssh.<domain>`. Standalone temporarily stops Nginx because it needs public port 80. Renewals use acme.sh cron and a deploy hook to refresh Nginx and stunnel certificate files.
+`modules/acme-manager.sh` issues one certificate for the main domain only, using `webroot` (default) or `standalone`. Standalone temporarily stops Nginx because it needs public port 80. Renewals use acme.sh cron and a deploy hook to refresh Nginx and stunnel certificate files.
 
 Commands after install:
 
