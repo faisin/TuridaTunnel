@@ -211,9 +211,19 @@ UNIT
 
 SSH_TLS_PORT=8443
 STUNNEL_BACKEND_PORT=9444
+
+# Debian/Ubuntu menjalankan stunnel dengan user unprivileged stunnel4.
+# Simpan PID di direktori runtime yang memang dapat ditulis oleh user tersebut.
+getent passwd stunnel4 >/dev/null || { echo "User stunnel4 tidak ditemukan setelah pemasangan paket." >&2; exit 1; }
+getent group stunnel4 >/dev/null || { echo "Group stunnel4 tidak ditemukan setelah pemasangan paket." >&2; exit 1; }
+cat >/etc/tmpfiles.d/turidatunnel-stunnel.conf <<'TMPFILES'
+d /run/stunnel4 0750 stunnel4 stunnel4 -
+TMPFILES
+systemd-tmpfiles --create /etc/tmpfiles.d/turidatunnel-stunnel.conf
+install -d -o stunnel4 -g stunnel4 -m 0750 /run/stunnel4
 cat >/etc/stunnel/turidatunnel.conf <<EOFST
 foreground = no
-pid = /run/stunnel4.pid
+pid = /run/stunnel4/turidatunnel.pid
 setuid = stunnel4
 setgid = stunnel4
 [turidatunnel-dropbear]
@@ -276,6 +286,14 @@ systemctl enable --now xray nginx haproxy
 systemctl enable stunnel4
 systemctl restart nginx xray
 systemctl restart stunnel4
+# stunnel4 pada Debian memakai unit SysV; status "active (exited)" saja
+# tidak menjamin listener berhasil dibuat, jadi validasi port backend-nya.
+sleep 1
+if ! ss -H -lnt "sport = :${STUNNEL_BACKEND_PORT}" | grep -q LISTEN; then
+  echo "stunnel tidak membuka 127.0.0.1:${STUNNEL_BACKEND_PORT}. Log terakhir:" >&2
+  journalctl -u stunnel4 -n 30 --no-pager >&2 || true
+  exit 1
+fi
 systemctl restart haproxy
 printf '\nXray ready. HTTP :80 -> Nginx; TLS :443 ${DOMAIN} -> HAProxy -> Nginx TLS 127.0.0.1:9443 -> Xray; SSH TLS ${DOMAIN}:8443 -> HAProxy -> stunnel 127.0.0.1:${STUNNEL_BACKEND_PORT} -> Dropbear :109.\n'
 printf 'Domain: %s\n' "$DOMAIN"
