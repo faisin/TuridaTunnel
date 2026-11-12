@@ -87,7 +87,6 @@ if [[ -s /etc/turidatunnel/domain ]]; then
 elif [[ -s /etc/xray/domain ]]; then
   DOMAIN="$(head -n1 /etc/xray/domain)"
 else
-  # /dev/tty allows interactive prompts even when setup.sh is piped from wget/curl.
   if [[ -r /dev/tty ]]; then
     read -r -p 'Masukkan domain yang DNS A/AAAA-nya sudah mengarah ke IP VPS: ' DOMAIN </dev/tty
   else
