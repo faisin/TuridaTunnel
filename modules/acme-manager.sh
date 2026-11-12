@@ -50,15 +50,20 @@ issue(){
   install_acme
   # Verify that Nginx serves the exact ACME webroot before contacting the CA.
   if [[ "$mode" == webroot ]]; then
-    local probe="turidatunnel-acme-probe-$$"
+    local probe="turidatunnel-acme-probe-$$" body="/tmp/turidatunnel-acme-probe-$$.body" code
     printf 'turidatunnel-acme-ok\n' >"$WEBROOT/.well-known/acme-challenge/$probe"
-    if ! curl -fsS --max-time 5 -H "Host: $DOMAIN" "http://127.0.0.1/.well-known/acme-challenge/$probe" | grep -qx 'turidatunnel-acme-ok'; then
-      rm -f "$WEBROOT/.well-known/acme-challenge/$probe"
-      echo 'Nginx tidak menyajikan webroot ACME dengan benar pada port 80.' >&2
-      echo "Periksa: http://$DOMAIN/.well-known/acme-challenge/" >&2
+    chmod 0644 "$WEBROOT/.well-known/acme-challenge/$probe"
+    code="$(curl -sS --max-time 5 -o "$body" -w '%{http_code}' -H "Host: $DOMAIN" "http://127.0.0.1/.well-known/acme-challenge/$probe" || true)"
+    if [[ "$code" != 200 ]] || ! grep -qx 'turidatunnel-acme-ok' "$body" 2>/dev/null; then
+      echo 'Gagal menguji webroot ACME melalui Nginx.' >&2
+      echo "HTTP status: ${code:-tidak ada}" >&2
+      echo "File uji: $WEBROOT/.well-known/acme-challenge/$probe" >&2
+      echo 'Konfigurasi Nginx aktif:' >&2
+      nginx -T 2>&1 | grep -n -A12 -B3 'acme-challenge' >&2 || true
+      rm -f "$WEBROOT/.well-known/acme-challenge/$probe" "$body"
       return 1
     fi
-    rm -f "$WEBROOT/.well-known/acme-challenge/$probe"
+    rm -f "$WEBROOT/.well-known/acme-challenge/$probe" "$body"
   fi
   case "$mode" in
     webroot)
